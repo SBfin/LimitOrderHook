@@ -1,0 +1,14 @@
+@ensdomains/=lib/periphery-next/lib/v4-core/node_modules/@ensdomains/
+@openzeppelin/=lib/periphery-next/lib/v4-core/lib/openzeppelin-contracts/
+@openzeppelin/contracts/=lib/periphery-next/lib/v4-core/lib/openzeppelin-contracts/contracts/
+@uniswap/v4-core/=lib/periphery-next/lib/v4-core/
+ds-test/=lib/periphery-next/lib/v4-core/lib/forge-std/lib/ds-test/src/
+erc4626-tests/=lib/periphery-next/lib/v4-core/lib/openzeppelin-contracts/lib/erc4626-tests/
+forge-gas-snapshot/=lib/periphery-next/lib/v4-core/lib/forge-gas-snapshot/src/
+forge-std/=lib/forge-std/src/
+hardhat/=lib/periphery-next/lib/v4-core/node_modules/hardhat/
+openzeppelin-contracts/=lib/periphery-next/lib/v4-core/lib/openzeppelin-contracts/
+periphery-next/=lib/periphery-next/
+permit2/=lib/periphery-next/lib/permit2/
+solmate/=lib/periphery-next/lib/v4-core/lib/solmate/
+v4-core/=lib/periphery-next/lib/v4-core/src/
