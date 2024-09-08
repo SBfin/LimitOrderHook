@@ -2,18 +2,25 @@ pragma solidity ^0.8.0;
 
 import {BaseHook} from "lib/periphery-next/src/base/hooks/BaseHook.sol";
 import {ERC1155} from "openzeppelin-contracts/contracts/token/ERC1155/ERC1155.sol";
-import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
-import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {IPoolManager} from "lib/periphery-next/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "lib/periphery-next/lib/v4-core/src/libraries/Hooks.sol";
 import {PoolId, PoolIdLibrary} from "lib/periphery-next/lib/v4-core/src/types/PoolId.sol";
-import {Currency, CurrencyLibrary} from "lib/periphery-next/lib/v4-core/librariees/CurrencyLibrary.sol";
+import {Currency, CurrencyLibrary} from "lib/periphery-next/lib/v4-core/src/types/Currency.sol";
+import {PoolKey} from "lib/periphery-next/lib/v4-core/src/types/PoolKey.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {TickMath} from "lib/periphery-next/lib/v4-core/src/libraries/TickMath.sol";
+import {BalanceDelta} from "lib/periphery-next/lib/v4-core/src/types/BalanceDelta.sol";
+import {FixedPointMathLib} from "lib/periphery-next/lib/v4-core/lib/solmate/src/utils/FixedPointMathLib.sol";
 
-import {TickMath} from "v4-core/libraries/TickMath.sol";
-import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
+// Declare TokenData struct here or import it from the relevant file
+struct TokenData {
+    PoolKey poolKey;
+    int24 tickLower;
+    bool zeroForOne;
+}
 
 contract TokenProfitsHook is BaseHook, ERC1155 {
-    using PoolIdLibrary for IPoolManager.PoolKey;
+    using PoolIdLibrary for PoolKey;
     // Initialize BaseHook and ERC1155 parent contract in the constructor
     using CurrencyLibrary for Currency;
     using FixedPointMathLib for uint256;
@@ -37,18 +44,16 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     //tokeIdTotalSupplyis a mapping that stores howmany tokens need to be sold to execute the take order
     mapping(uint256 tokenId => uint256 supply) public tokenIdTotalSupply;
     // tokenIdData is a mapping that stores the PoolKey, tickLower, and zero for one values for a given 
-    mapping(uint256 tokenId => tokenData) public tokenIdData;
-
-
+    mapping(uint256 tokenId => TokenData) public tokenIdData;
 
     constructor(
         IPoolManager _poolManager,
         string memory _uri
     ) BaseHook(_poolManager) ERC1155(_uri) {}
 
-    function getHooksCalls() public pure override returns (Hooks.Calls memory) {
+    function getHooksCalls() public pure override returns (Hooks.Permissions memory) {
         return
-        Hooks.Calls({
+        Hooks.Permissions({
             beforeInitialize: false,
             afterInitialize: true,
             beforeModifyPosition: false,
@@ -63,7 +68,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
 
     // Core utilities
     function PlaceOrder(
-        IPoolManger.Poolkey calldata key,
+        PoolKey calldata key,
         int24 tick,
         uint256 amountIn,
         bool zeroForOne
@@ -96,7 +101,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     }
 
     function cancelOrder(
-        IPoolManager.PoolKey calldata key,
+        PoolKey calldata key,
         int24 tick,
         bool zeroForOne) external {
             int25 tickLower = _getTickLower(tick, key.TickSpacing);
@@ -118,17 +123,17 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
         }
     
 
-    // hooks
-    function afterInitialize(address, IPoolManager.PoolKey calldata key, uint160, int24 tick) 
-    external override poolManagerOnly returns (bytes4) {
+    // hooks REMOVING PoolManager only - add later
+    function afterInitialize(address, PoolKey calldata key, uint160, int24 tick) 
+    external override returns (bytes4) {
         _setTickLowerLast(key.toId(), _getTickLower(tick, key.tickSpacing));
 
         return TakeProfitsHooks.afterInitialize.selector;
     }
 
-    function afterSwap(address, IPoolManger.PoolKey calldata key,
-        IPoolManger.SwapParams calldata params,
-        BalanceDelta) external override poolManagerOnly returns (bytes4) {
+    function afterSwap(address, PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta) external override returns (bytes4) {
             int24 lastTickLower = tickLowerLasts[key.toId()];
             (, int24 currentTick, , , ,) = poolManager.getSlot0(key.toId());
             int24 currentTickLower = _getTickLower(currentTick, key.tickSpacing);
@@ -172,7 +177,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
         }
 
     // fillorder
-    function fillOrder(IPoolManager.PoolKey calldata key,
+    function fillOrder(PoolKey calldata key,
     int24 tick,
     bool zeroForOne,
     int256 amountIn) internal {
@@ -206,7 +211,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
         uint256 tokenId,
         uint256 amountIn,
         address destination
-    ) external (
+    ) external {
         require(
         tokenIdClaimable[tokenId] > 0,
         "TakeProfitsHook: No tokens to redeem");
@@ -234,9 +239,9 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
 
         IERC20(tokenToSendContract).transfer(destination, amountToSend);
 
-    )
+    }
 
-    function _handleSwap(IPoolManager.PoolKey calldata key, 
+    function _handleSwap(PoolKey calldata key, 
     IPoolManager.SwapParams calldata params) 
     external returns (BalanceDelta) {
         BalanceDelta delta = poolManager.swap(key, params);
@@ -281,7 +286,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
 
     // ERC-1155 helpers
     function getTokenId(
-        IpoolManager.Poolkey calldata key,
+        PoolKey calldata key,
         int24 tickLower,
         bool zeroForOne
     ) public pure returns (uint256) {
