@@ -11,19 +11,14 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {TickMath} from "lib/periphery-next/lib/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "lib/periphery-next/lib/v4-core/src/types/BalanceDelta.sol";
 import {FixedPointMathLib} from "lib/periphery-next/lib/v4-core/lib/solmate/src/utils/FixedPointMathLib.sol";
+import {StateLibrary} from "lib/periphery-next/lib/v4-core/src/libraries/StateLibrary.sol";
 
-// Declare TokenData struct here or import it from the relevant file
-struct TokenData {
-    PoolKey poolKey;
-    int24 tickLower;
-    bool zeroForOne;
-}
-
-contract TokenProfitsHook is BaseHook, ERC1155 {
+contract TakeProfitsHook is BaseHook, ERC1155 {
     using PoolIdLibrary for PoolKey;
     // Initialize BaseHook and ERC1155 parent contract in the constructor
     using CurrencyLibrary for Currency;
     using FixedPointMathLib for uint256;
+    using StateLibrary for IPoolManager;
 
     mapping(PoolId poolId => int24 tickLower) public tickLowerLasts;
 
@@ -34,7 +29,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
                     int256 amount
                 )
             )
-    ) public takeProfitPositions;
+    ) public takeProfitsPositions;
 
     // ERC-1155 State
     //tokenIdExists is a mapping to store whether a given tokenId (i.e. a take-profit order) exists
@@ -46,42 +41,54 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     // tokenIdData is a mapping that stores the PoolKey, tickLower, and zero for one values for a given 
     mapping(uint256 tokenId => TokenData) public tokenIdData;
 
+    struct TokenData {
+        PoolKey poolKey;
+        int24 tick;
+        bool zeroForOne;
+    }
+
     constructor(
         IPoolManager _poolManager,
         string memory _uri
     ) BaseHook(_poolManager) ERC1155(_uri) {}
 
-    function getHooksCalls() public pure override returns (Hooks.Permissions memory) {
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return
         Hooks.Permissions({
             beforeInitialize: false,
             afterInitialize: true,
-            beforeModifyPosition: false,
-            afterModifyPosition: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
             beforeSwap: false,
             afterSwap: true,
             beforeDonate: false,
-            afterDonate: false
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
         });
 
     }
 
     // Core utilities
-    function PlaceOrder(
+    function placeOrder(
         PoolKey calldata key,
         int24 tick,
         uint256 amountIn,
         bool zeroForOne
     ) external returns (int24) {
-        int24 tickLower = _getTickLower(tick, key.tickSpacing, tickSpacing);
+        int24 tickLower = _getTickLower(tick, key.tickSpacing);
 
-        takeProfitPositions[key.toId()][tickLower][zeroForOne] += int256(amountIn);
+        takeProfitsPositions[key.toId()][tickLower][zeroForOne] += int256(amountIn);
 
         uint256 tokenId = getTokenId(key, tickLower, zeroForOne);
 
         if (!tokenIdExists[tokenId]) {
             tokenIdExists[tokenId] = true;
-            tokenIdData[tokenId] = tokenData(key, tickLower, zeroForOne);
+            tokenIdData[tokenId] = TokenData(key, tickLower, zeroForOne);
         }
 
         _mint(msg.sender, tokenId, amountIn, "");
@@ -104,14 +111,14 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
         PoolKey calldata key,
         int24 tick,
         bool zeroForOne) external {
-            int25 tickLower = _getTickLower(tick, key.TickSpacing);
+            int24 tickLower = _getTickLower(tick, key.tickSpacing);
             uint256 tokenId = getTokenId(key, tickLower, zeroForOne);
 
             // balanceOf is coming from ERC-1155
             uint256 amountIn = balanceOf(msg.sender, tokenId);
             require(amountIn > 0, "no orders to cancel");
 
-            takeProfitPosition[key.toId()][tickLower][zeroForOne] -= int256(amountIn);
+            takeProfitsPositions[key.toId()][tickLower][zeroForOne] -= int256(amountIn);
             tokenIdTotalSupply[tokenId] -= amountIn;
             _burn(msg.sender, tokenId, amountIn);
 
@@ -124,18 +131,19 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     
 
     // hooks REMOVING PoolManager only - add later
-    function afterInitialize(address, PoolKey calldata key, uint160, int24 tick) 
+    function afterInitialize(address, PoolKey calldata key, uint160, int24 tick, bytes calldata) 
     external override returns (bytes4) {
         _setTickLowerLast(key.toId(), _getTickLower(tick, key.tickSpacing));
 
-        return TakeProfitsHooks.afterInitialize.selector;
+        return TakeProfitsHook.afterInitialize.selector;
     }
 
-    function afterSwap(address, PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        BalanceDelta) external override returns (bytes4) {
+    function afterSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, BalanceDelta, bytes calldata) 
+    external 
+    override 
+    returns (bytes4,int128) {
             int24 lastTickLower = tickLowerLasts[key.toId()];
-            (, int24 currentTick, , , ,) = poolManager.getSlot0(key.toId());
+            (, int24 currentTick, , ) = poolManager.getSlot0(key.toId());
             int24 currentTickLower = _getTickLower(currentTick, key.tickSpacing);
 
             bool swapZeroForOne = !params.zeroForOne;
@@ -145,7 +153,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
             if (lastTickLower < currentTickLower) {
 
                 for (int24 tick = lastTickLower; tick < currentTickLower; ) {
-                    swapAmountIn = takeProfitPositions[key.toId()][tick][
+                    swapAmountIn = takeProfitsPositions[key.toId()][tick][
                         swapZeroForOne
                     ];
 
@@ -158,7 +166,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
             } else {
 
                 for (int24 tick = lastTickLower; tick > currentTickLower; ) {
-                    swapAmountIn = takeProfitPositions[key.toId()][tick][
+                    swapAmountIn = takeProfitsPositions[key.toId()][tick][
                         swapZeroForOne
                     ];
 
@@ -173,7 +181,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
 
             tickLowerLasts[key.toId()] = currentTickLower;
 
-            return TakeProfitHoks.afterSwap.selector;
+            return (TakeProfitsHook.afterSwap.selector, 0);
         }
 
     // fillorder
@@ -185,18 +193,18 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
             zeroForOne: zeroForOne,
             amountSpecified: amountIn,
             sqrtPriceLimitX96: zeroForOne
-                ? TickMath.MIN_SQRT_RATIO + 1
-                : TickMath.MAX_SQRT_RATIO - 1
+                ? TickMath.MIN_SQRT_PRICE + 1
+                : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        balanceDelta delta = abi.decode(
-            poolMager.lock(
+        BalanceDelta delta = abi.decode(
+            poolManager.unlock(
                 abi.encodeCall(this._handleSwap, (key, swapParams))
             ),
-            (balanceDelta)
+            (BalanceDelta)
         );
 
-        tokenProfitPostiions[key.toId()][tick][zeroForOne] -= amountIn;
+        takeProfitsPositions[key.toId()][tick][zeroForOne] -= amountIn;
 
         uint256 tokenId = getTokenId(key, tick, zeroForOne);
 
@@ -204,7 +212,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
             ? uint256(int256(-delta.amount1()))
             : uint256(int256(-delta.amount0()));
         
-        tokenIdClaimable[tokenId] += amountOfTokensReceivedFromSwaps;
+        tokenIdClaimable[tokenId] += amountOfTokensReceivedFromSwap;
     }
 
     function redeem(
@@ -235,7 +243,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
 
         tokenIdClaimable[tokenId] -= amountToSend;
         tokenIdTotalSupply[tokenId] -= amountIn;
-        _bunr(msg.sender, tokenId, amountIn);
+        _burn(msg.sender, tokenId, amountIn);
 
         IERC20(tokenToSendContract).transfer(destination, amountToSend);
 
@@ -244,13 +252,13 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     function _handleSwap(PoolKey calldata key, 
     IPoolManager.SwapParams calldata params) 
     external returns (BalanceDelta) {
-        BalanceDelta delta = poolManager.swap(key, params);
+        BalanceDelta delta = poolManager.swap(key, params, "");
 
         if (params.zeroForOne) {
             if (delta.amount0() > 0) {
                 IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), uint128(delta.amount0())
                 );
-                poolManager.settle(key.currency0);
+                poolManager.settle();
             }
 
             if (delta.amount1() < 0) {
@@ -267,7 +275,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
             if (delta.amount1() > 0) {
                 IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), uint128(delta.amount0())
                 );
-                poolManager.settle(key.currency0);
+                poolManager.settle();
             }
 
             if (delta.amount0() < 0) {
@@ -292,7 +300,7 @@ contract TokenProfitsHook is BaseHook, ERC1155 {
     ) public pure returns (uint256) {
         return
             uint256(
-                keccack256(abi.encodePacked(key.toId(), tickLower, zeroForOne))
+                keccak256(abi.encodePacked(key.toId(), tickLower, zeroForOne))
             );
     }
 
