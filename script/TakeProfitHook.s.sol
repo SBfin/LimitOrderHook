@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 // Foundry Libraries
 import "forge-std/Test.sol";
 import {GasSnapshot} from "forge-gas-snapshot/GasSnapshot.sol";
+import {console} from "forge-std/console.sol";
 
 // Test ERC-20 token implementation
 import {MockERC20} from "lib/periphery-next/lib/permit2/test/mocks/MockERC20.sol";
@@ -212,17 +213,20 @@ contract TakeProfitsHookTest is Test, GasSnapshot {
 
         // Get the current balances of the tokens
         uint256 originalBalance = token0.balanceOf(address(this));
+        console.log("Original balance: ", originalBalance);
 
         // Place the order
         token0.approve(address(hook), amount);
         int24 tickLower = hook.placeOrder(poolKey, tick, amount, zeroForOne);
 
         uint256 newBalance = token0.balanceOf(address(this));
+        console.log("New balance: ", newBalance);
 
         assertEq(tickLower, 60);
-        
+        console.log("Tick Lower: ", tickLower);
+
         // Ensure that the amount of token0 has been deducted
-        assertEq(originalBalance - amount, amount);
+        assertEq(originalBalance - amount, newBalance);
 
         // Chekc the balance of ERC-1155 received
         uint256 tokenId = hook.getTokenId(poolKey, tickLower, zeroForOne);
