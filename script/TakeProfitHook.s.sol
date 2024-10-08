@@ -281,7 +281,7 @@ contract TakeProfitsHookTest is Test, GasSnapshot {
 
     function test_orderExecuteZeroForOne() public {
         int24 tick = 180;
-        uint256 amount = 1 ether;
+        uint256 amount = 10 ether;
         bool zeroForOne = true;
 
         // Get the current balances of the tokens

@@ -221,6 +221,9 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
 
         takeProfitsPositions[key.toId()][tick][zeroForOne] -= amountIn;
 
+        console.log("takeProfitsPositions:");
+        console.log(takeProfitsPositions[key.toId()][tick][zeroForOne]);
+
         uint256 tokenId = getTokenId(key, tick, zeroForOne);
 
         uint256 amountOfTokensReceivedFromSwap = zeroForOne
@@ -270,48 +273,61 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     external returns (BalanceDelta) {
 
         console.log("Inside _handleswap");
+        console.log("SwapParams of the limit order:");
+        console.log("amountIn", params.amountSpecified);
+        console.log("zeroForOne: ", params.zeroForOne);
+        console.log("sqrtPriceLimitX96: ", params.sqrtPriceLimitX96);
 
         BalanceDelta delta = poolManager.swap(key, params, "");
 
         console.log("delta.amount0: ", delta.amount0());
         console.log("delta.amount1: ", delta.amount1());
-        console.log("zeroForOne: ", params.zeroForOne);
 
+        
+        // If this swap was a swap for Token 0 to Token 1
         if (params.zeroForOne) {
+            // If we owe Uniswap Token 0, we need to send them the required amount
             if (delta.amount0() > 0) {
-                IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), uint128(delta.amount0())
+                IERC20(Currency.unwrap(key.currency0)).transfer(
+                    address(poolManager),
+                    uint128(delta.amount0())
                 );
-                poolManager.settle();
+                poolManager.settle(key.currency0);
             }
 
+            // If we are owed Token 1, we need to `take` it from the Pool Manager
+            // NOTE: This will be a negative value, as it is a negative balance change from the pool's perspective
             if (delta.amount1() < 0) {
+                // We flip the sign of the amount to make it positive when taking it from the pool manager
                 poolManager.take(
                     key.currency1,
                     address(this),
-                    //flip the sign
                     uint128(-delta.amount1())
                 );
             }
-            
-
-        } else {
-            if (delta.amount1() > 0) {
-                IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), uint128(delta.amount0())
-                );
-                poolManager.settle();
-            }
-
-            if (delta.amount0() < 0) {
-                console.log("settling");
-                poolManager.take(
-                    key.currency1,
-                    address(this),
-                    //flip the sign
-                    uint128(-delta.amount1())
-                );
-            }
-
         }
+        // Else if this swap was a swap for Token 1 to Token 0
+        else {
+            // Same as above
+            // If we owe Uniswap Token 1, we need to send them the required amount
+            if (delta.amount1() > 0) {
+                IERC20(Currency.unwrap(key.currency1)).transfer(
+                    address(poolManager),
+                    uint128(delta.amount1())
+                );
+                poolManager.settle(key.currency1);
+            }
+
+            // If we are owed Token 0, we take it from the Pool Manager
+            if (delta.amount0() < 0) {
+                poolManager.take(
+                    key.currency0,
+                    address(this),
+                    uint128(-delta.amount0())
+                );
+            }
+        }
+
 
         return delta;
     }
