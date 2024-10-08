@@ -12,6 +12,7 @@ import {TickMath} from "lib/periphery-next/lib/v4-core/src/libraries/TickMath.so
 import {BalanceDelta} from "lib/periphery-next/lib/v4-core/src/types/BalanceDelta.sol";
 import {FixedPointMathLib} from "lib/periphery-next/lib/v4-core/lib/solmate/src/utils/FixedPointMathLib.sol";
 import {StateLibrary} from "lib/periphery-next/lib/v4-core/src/libraries/StateLibrary.sol";
+import {console} from "forge-std/console.sol";
 
 contract TakeProfitsHook is BaseHook, ERC1155 {
     using PoolIdLibrary for PoolKey;
@@ -41,11 +42,13 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     // tokenIdData is a mapping that stores the PoolKey, tickLower, and zero for one values for a given 
     mapping(uint256 tokenId => TokenData) public tokenIdData;
 
+
     struct TokenData {
         PoolKey poolKey;
         int24 tick;
         bool zeroForOne;
     }
+
 
     constructor(
         IPoolManager _poolManager,
@@ -138,7 +141,7 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
         return TakeProfitsHook.afterInitialize.selector;
     }
 
-    function afterSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, BalanceDelta, bytes calldata) 
+    function afterSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, BalanceDelta delta, bytes calldata) 
     external 
     override 
     returns (bytes4,int128) {
@@ -149,15 +152,20 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
             bool swapZeroForOne = !params.zeroForOne;
             int256 swapAmountIn;
 
+            console.log("lastTickLower: ", lastTickLower);
+            console.log("currentTickLower: ", currentTickLower);
+            console.log("swapZeroForOne: ", swapZeroForOne);
+
             // tick has increased
             if (lastTickLower < currentTickLower) {
-
+                console.log("inside lastTickLower < currentTickLower");
                 for (int24 tick = lastTickLower; tick < currentTickLower; ) {
                     swapAmountIn = takeProfitsPositions[key.toId()][tick][
                         swapZeroForOne
                     ];
 
                     if (swapAmountIn > 0) {
+                        console.log("inside fillorder for swapAmountIn > 0");
                         fillOrder(key, tick, swapZeroForOne, swapAmountIn);
                     }
 
@@ -169,9 +177,14 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
                     swapAmountIn = takeProfitsPositions[key.toId()][tick][
                         swapZeroForOne
                     ];
+                    console.log(swapAmountIn);
+                    console.log(tick);
 
                     if (swapAmountIn > 0) {
+                        console.log("inside fillorder for swapAmountIn > 0");
+                        console.log(swapAmountIn);
                         fillOrder(key, tick, swapZeroForOne, swapAmountIn);
+                        console.log("order filled");
                     }
 
                     tick -= key.tickSpacing;
@@ -181,6 +194,8 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
 
             tickLowerLasts[key.toId()] = currentTickLower;
 
+            console.log("end hook");
+
             return (TakeProfitsHook.afterSwap.selector, 0);
         }
 
@@ -189,20 +204,20 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     int24 tick,
     bool zeroForOne,
     int256 amountIn) internal {
+        console.log("inside fillOrder");
+        console.log("SwapParams of the order:");
+        console.log("amountIn", amountIn);
+        console.log("zeroForOne: ", zeroForOne);
+        uint160 sqrtPriceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        console.log("sqrtPriceLimit: ", sqrtPriceLimit);
+
         IPoolManager.SwapParams memory swapParams = IPoolManager.SwapParams({
             zeroForOne: zeroForOne,
             amountSpecified: amountIn,
-            sqrtPriceLimitX96: zeroForOne
-                ? TickMath.MIN_SQRT_PRICE + 1
-                : TickMath.MAX_SQRT_PRICE - 1
+            sqrtPriceLimitX96: sqrtPriceLimit
         });
 
-        BalanceDelta delta = abi.decode(
-            poolManager.unlock(
-                abi.encodeCall(this._handleSwap, (key, swapParams))
-            ),
-            (BalanceDelta)
-        );
+        BalanceDelta delta = this._handleSwap(key, swapParams);
 
         takeProfitsPositions[key.toId()][tick][zeroForOne] -= amountIn;
 
@@ -213,6 +228,7 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
             : uint256(int256(-delta.amount0()));
         
         tokenIdClaimable[tokenId] += amountOfTokensReceivedFromSwap;
+
     }
 
     function redeem(
@@ -252,7 +268,14 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
     function _handleSwap(PoolKey calldata key, 
     IPoolManager.SwapParams calldata params) 
     external returns (BalanceDelta) {
+
+        console.log("Inside _handleswap");
+
         BalanceDelta delta = poolManager.swap(key, params, "");
+
+        console.log("delta.amount0: ", delta.amount0());
+        console.log("delta.amount1: ", delta.amount1());
+        console.log("zeroForOne: ", params.zeroForOne);
 
         if (params.zeroForOne) {
             if (delta.amount0() > 0) {
@@ -279,6 +302,7 @@ contract TakeProfitsHook is BaseHook, ERC1155 {
             }
 
             if (delta.amount0() < 0) {
+                console.log("settling");
                 poolManager.take(
                     key.currency1,
                     address(this),

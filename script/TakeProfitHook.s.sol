@@ -32,9 +32,6 @@ import {TakeProfitsHook} from "../src/TakeProfitsHook.sol";
 import {TakeProfitsStub} from "../src/TakeProfitsStub.sol";    
 
 
-// TO DO function cancel_order {}
-// test_order_execute_zeroForOne()
-// test_order_execute_oneForZero()
 
 contract TakeProfitsHookTest is Test, GasSnapshot {
     using PoolIdLibrary for PoolKey;
@@ -60,7 +57,7 @@ contract TakeProfitsHookTest is Test, GasSnapshot {
         );
 
     // poolManager is the Uniswap v4 Pool Manager
-    PoolManager poolManager;
+    IPoolManager poolManager;
 
     // modifyLiquidityRouter is the test-version of the contract
     PoolModifyLiquidityTest modifyLiquidityRouter;
@@ -236,8 +233,99 @@ contract TakeProfitsHookTest is Test, GasSnapshot {
         assertTrue(tokenId != 0);
         assertEq(tokenBalance, amount);
 
+    }
+// TO DO function cancel_order {}
+// test_order_execute_zeroForOne()
+// test_order_execute_oneForZero()
+    function test_cancelOrder() public {
+        int24 tick = 100;
+        uint256 amount = 10 ether;
+        bool zeroForOne = true;
 
-}
+        // Get the current balances of the tokens
+        uint256 originalBalance = token0.balanceOf(address(this));
+        console.log("Original balance: ", originalBalance);
+
+        // Place the order
+        token0.approve(address(hook), amount);
+        int24 tickLower = hook.placeOrder(poolKey, tick, amount, zeroForOne);
+
+        uint256 newBalance = token0.balanceOf(address(this));
+        console.log("New balance: ", newBalance);
+
+        assertEq(tickLower, 60);
+        console.log("Tick Lower: ", tickLower);
+
+        // Ensure that the amount of token0 has been deducted
+        assertEq(originalBalance - amount, newBalance);
+
+        // Chekc the balance of ERC-1155 received
+        uint256 tokenId = hook.getTokenId(poolKey, tickLower, zeroForOne);
+        uint256 tokenBalance = hook.balanceOf(address(this), tokenId);
+
+        // Ensure that we were, in facet, given the ERC11 55 tokens for the order
+        assertTrue(tokenId != 0);
+        assertEq(tokenBalance, amount);
+
+        // Cancel the order
+        hook.cancelOrder(poolKey, tick, zeroForOne);
+
+        // Ensure that the balance of token0 has been restored
+        uint256 finalBalance = token0.balanceOf(address(this));
+        assertEq(originalBalance, finalBalance);
+
+        // Ensure that the balance of the ERC-1155 tokens has been reduced
+        uint256 finalTokenBalance = hook.balanceOf(address(this), tokenId);
+        assertEq(finalTokenBalance, 0);
+    }
+
+    function test_orderExecuteZeroForOne() public {
+        int24 tick = 180;
+        uint256 amount = 1 ether;
+        bool zeroForOne = true;
+
+        // Get the current balances of the tokens
+        uint256 originalBalance = token0.balanceOf(address(this));
+        console.log("Original balance: ", originalBalance);
+
+        // Place the order
+        token0.approve(address(hook), amount);
+        int24 tickLower = hook.placeOrder(poolKey, tick, amount, zeroForOne);
+        console.log("Tick lower", tickLower);
+
+        //Check tick of the pool
+        (, int24 beforeSwapTick, , ) = poolManager.getSlot0(poolKey.toId());
+        console.log("Tick before swap: ", beforeSwapTick);
+
+        // move pool tick to the tick of the order
+        // slippage tolerance to allow for unlimited price impact
+        uint160 MIN_PRICE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
+        uint160 MAX_PRICE_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
+
+        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+            zeroForOne: !zeroForOne,
+            amountSpecified: 1 ether,
+            sqrtPriceLimitX96: !zeroForOne ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT // unlimited impact
+        });
+
+        bytes memory hookData = new bytes(0); // no hook data on the hookless pool
+        
+        PoolSwapTest.TestSettings memory testSettings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+
+        swapRouter.swap(poolKey, params, testSettings, hookData);
+
+        // Check tick of the pool
+        (, int24 currentTick, , ) = poolManager.getSlot0(poolKey.toId());
+        console.log("Tick after swap: ", currentTick);
+
+        // Check if limit order has been executed
+        console.log("Take profits positions: ");
+        console.log(hook.takeProfitsPositions(poolKey.toId(),tickLower,zeroForOne));
+        console.log("deltaTest");
+
+    }
+
 
 
 
